@@ -41,7 +41,9 @@ public class WordCountTopology {
   public static class SplitSentence extends ShellBolt implements IRichBolt {
 
     public SplitSentence() {
-      super("python", "splitsentence.py");
+      //super("python", "C:\\storm_stuff\\storm\\examples\\storm-starter\\multilang\\resources\\splitsentence.py");
+    	
+    	
     }
 
     @Override
@@ -77,6 +79,8 @@ public class WordCountTopology {
 
   public static void main(String[] args) throws Exception {
 
+	System.out.println("Hello World!");
+	  
     TopologyBuilder builder = new TopologyBuilder();
 
     builder.setSpout("spout", new RandomSentenceSpout(), 5);
