@@ -32,6 +32,7 @@ import backtype.storm.utils.Utils;
 import storm.starter.spout.RandomIntSpout;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Map;
 
 /**
@@ -39,12 +40,152 @@ import java.util.Map;
  */
 public class WeaveShareTopology {
 
-	public static class SumBolt extends BaseRichBolt {
+	public static class SumBoltMult extends BaseRichBolt {
+		OutputCollector _collector;
+		ArrayList<Acq> acqs = new ArrayList<Acq>();
+		int currFragLengthIndex = 0;
+		ArrayList<FragDescr> fragDescriptions = null;
+		ArrayList<Integer> fragments = null;
+		ArrayList<Integer> buffer = null;
+		long startTime = -1;
+
+		@Override
+		public void prepare(Map conf, TopologyContext context, OutputCollector collector) {
+			_collector = collector;
+			Acq acq1 = new Acq(8, 4);
+			Acq acq2 = new Acq(18, 6);
+			acqs.add(acq1);
+			acqs.add(acq2);
+			fragDescriptions = new ArrayList<FragDescr>();
+			fragDescriptions.add(new FragDescr(4, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1, 2)))));
+			fragDescriptions.add(new FragDescr(2, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq2, 6)))));
+			fragDescriptions.add(new FragDescr(2, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1, 3)))));
+			fragDescriptions.add(new FragDescr(4, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1, 3), new AcqToNumFrags(acq2, 6)))));
+			buffer = new ArrayList<Integer>();
+			fragments = new ArrayList<Integer>();
+		}
+
+		@Override
+		public void execute(Tuple tuple) {
+			if (startTime == -1) {
+				startTime = System.currentTimeMillis();
+			}
+			if (System.currentTimeMillis() - startTime < fragDescriptions.get(currFragLengthIndex).fragLength) {
+				buffer.add(tuple.getInteger(0));
+			} else {
+				int buffSum = 0;
+				for (Integer i : buffer) {
+					buffSum += i;
+				}
+				fragments.add(buffSum);
+				for (AcqToNumFrags aid : fragDescriptions.get(currFragLengthIndex).acqsToNumFrags) {
+					if (fragments.size() >= aid.numFrags) {
+						aid.acq.sum = 0;
+						for (int i = fragments.size() - aid.numFrags; i < fragments.size(); i++) {
+							aid.acq.sum += fragments.get(i);
+						}
+					}
+				}
+				buffer = new ArrayList<Integer>();
+				buffer.add(tuple.getInteger(0));
+				startTime = System.currentTimeMillis();
+				if (currFragLengthIndex == fragDescriptions.size() - 1) {
+					currFragLengthIndex = 0;
+				} else {
+					currFragLengthIndex++;
+				}
+			}
+			String sums = new String("\n");
+			for(Acq a : acqs){
+				sums += a.slide + ": " + a.sum + "\n";
+			}
+			_collector.emit(tuple, new Values(sums));
+			_collector.ack(tuple);
+		}
+
+		@Override
+		public void declareOutputFields(OutputFieldsDeclarer declarer) {
+			declarer.declare(new Fields("sums"));
+		}
+	}
+
+	public static class SumBoltPaired extends BaseRichBolt {
 		OutputCollector _collector;
 		int range = 1000;
-		int slide = 100;
+		int slide = 300;
+		int fragNum = 0;
+		int finalSum = 0;
+		int currFragLengthIndex = 0;
+		ArrayList<Integer> fragLengths = null;
+		ArrayList<Integer> fragments = null;
+		ArrayList<Integer> buffer = null;
+		long startTime = -1;
+
+		@Override
+		public void prepare(Map conf, TopologyContext context, OutputCollector collector) {
+			_collector = collector;
+			buffer = new ArrayList<Integer>();
+			fragments = new ArrayList<Integer>();
+			fragLengths = new ArrayList<Integer>();
+			int f1 = range % slide;
+			if (f1 == 0) {
+				fragNum = range / slide;
+				fragLengths.add(slide);
+			} else {
+				fragNum = (range / slide) * 2 + 1;
+				fragLengths.add(f1);
+				fragLengths.add(slide - f1);
+			}
+
+		}
+
+		@Override
+		public void execute(Tuple tuple) {
+			if (startTime == -1) {
+				startTime = System.currentTimeMillis();
+			}
+			if (System.currentTimeMillis() - startTime < fragLengths.get(currFragLengthIndex)) {
+				buffer.add(tuple.getInteger(0));
+			} else {
+				int buffSum = 0;
+				for (Integer i : buffer) {
+					buffSum += i;
+				}
+				fragments.add(buffSum);
+				if (fragments.size() > fragNum) {
+					fragments.remove(0);
+				}
+				if (fragments.size() == fragNum && currFragLengthIndex == 0) {
+					finalSum = 0;
+					for (Integer i : fragments) {
+						finalSum += i;
+					}
+				}
+				buffer = new ArrayList<Integer>();
+				buffer.add(tuple.getInteger(0));
+				startTime = System.currentTimeMillis();
+				if (currFragLengthIndex == fragLengths.size() - 1) {
+					currFragLengthIndex = 0;
+				} else {
+					currFragLengthIndex++;
+				}
+			}
+			_collector.emit(tuple, new Values(finalSum));
+			_collector.ack(tuple);
+		}
+
+		@Override
+		public void declareOutputFields(OutputFieldsDeclarer declarer) {
+			declarer.declare(new Fields("sum"));
+		}
+	}
+
+	public static class SumBoltSingle extends BaseRichBolt {
+		OutputCollector _collector;
+		int range = 1000;
+		int slide = 300;
 		int fragNum = range / slide;
-		int fragSum = 0;
+		int finalSum = 0;
 		ArrayList<Integer> fragments = null;
 		ArrayList<Integer> buffer = null;
 		long startTime = -1;
@@ -72,15 +213,17 @@ public class WeaveShareTopology {
 				if (fragments.size() > fragNum) {
 					fragments.remove(0);
 				}
-				fragSum = 0;
-				for (Integer i : fragments) {
-					fragSum += i;
+				if (fragments.size() == fragNum) {
+					finalSum = 0;
+					for (Integer i : fragments) {
+						finalSum += i;
+					}
 				}
 				buffer = new ArrayList<Integer>();
 				buffer.add(tuple.getInteger(0));
 				startTime = System.currentTimeMillis();
 			}
-			_collector.emit(tuple, new Values(fragSum));
+			_collector.emit(tuple, new Values(finalSum));
 			_collector.ack(tuple);
 		}
 
@@ -88,15 +231,14 @@ public class WeaveShareTopology {
 		public void declareOutputFields(OutputFieldsDeclarer declarer) {
 			declarer.declare(new Fields("sum"));
 		}
-
 	}
 
-	public static class NaiiveSumBolt extends BaseRichBolt {
+	public static class NaiiveSumBoltSingle extends BaseRichBolt {
 		OutputCollector _collector;
 		int range = 1000;
 		int slide = 100;
 		int bufNum = range / slide;
-		int sum = 0;
+		int finalSum = 0;
 		ArrayList<ArrayList<Integer>> buffers = null;
 		ArrayList<Integer> buffer = null;
 		long startTime = -1;
@@ -120,17 +262,19 @@ public class WeaveShareTopology {
 				if (buffers.size() > bufNum) {
 					buffers.remove(0);
 				}
-				sum = 0;
-				for (ArrayList<Integer> ai : buffers) {
-					for (Integer i : ai) {
-						sum += i;
+				if (buffers.size() == bufNum) {
+					finalSum = 0;
+					for (ArrayList<Integer> ai : buffers) {
+						for (Integer i : ai) {
+							finalSum += i;
+						}
 					}
 				}
 				buffer = new ArrayList<Integer>();
 				buffer.add(tuple.getInteger(0));
 				startTime = System.currentTimeMillis();
 			}
-			_collector.emit(tuple, new Values(sum));
+			_collector.emit(tuple, new Values(finalSum));
 			_collector.ack(tuple);
 		}
 
@@ -145,8 +289,9 @@ public class WeaveShareTopology {
 		TopologyBuilder builder = new TopologyBuilder();
 
 		builder.setSpout("num_spout", new RandomIntSpout(), 1);
-		// builder.setBolt("sum_bolt", new SumBolt(), 1).shuffleGrouping("num_spout");
-		builder.setBolt("sum_bolt", new NaiiveSumBolt(), 1).shuffleGrouping("num_spout");
+		// builder.setBolt("sum_bolt", new SumBoltSingle(), 1).shuffleGrouping("num_spout");
+		// builder.setBolt("sum_bolt", new NaiiveSumBoltSingle(), 1).shuffleGrouping("num_spout");
+		builder.setBolt("sum_bolt", new SumBoltMult(), 1).allGrouping("num_spout");
 
 		Config conf = new Config();
 		conf.setDebug(true);
