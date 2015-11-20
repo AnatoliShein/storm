@@ -1,10 +1,14 @@
 package storm.starter;
 
-public class AcqToNumFrags {
-	Acq acq;
+import java.io.Serializable;
+
+public class AcqToNumFrags implements Serializable {
+
+	private static final long serialVersionUID = 1L;
+	Query acq;
 	int numFrags;
-	
-	public AcqToNumFrags(Acq acq, int numFrags) {
+
+	public AcqToNumFrags(Query acq, int numFrags) {
 		this.acq = acq;
 		this.numFrags = numFrags;
 	}

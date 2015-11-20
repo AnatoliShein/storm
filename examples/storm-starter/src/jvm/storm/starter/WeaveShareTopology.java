@@ -31,8 +31,11 @@ import backtype.storm.tuple.Values;
 import backtype.storm.utils.Utils;
 import storm.starter.spout.RandomIntSpout;
 
+import java.io.FileInputStream;
+import java.io.ObjectInputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -42,27 +45,44 @@ public class WeaveShareTopology {
 
 	public static class SumBoltMult extends BaseRichBolt {
 		OutputCollector _collector;
-		ArrayList<Acq> acqs = new ArrayList<Acq>();
+		ArrayList<Query> acqs = new ArrayList<Query>();
 		int currFragLengthIndex = 0;
 		ArrayList<FragDescr> fragDescriptions = null;
-		ArrayList<Integer> fragments = null;
-		ArrayList<Integer> buffer = null;
+		ArrayList<Integer> fragments = new ArrayList<Integer>();
+		ArrayList<Integer> buffer = new ArrayList<Integer>();
 		long startTime = -1;
+		int largestWindow = -1;
+		HashMap<Integer, Integer> sums = new HashMap<Integer, Integer>();
 
 		@Override
 		public void prepare(Map conf, TopologyContext context, OutputCollector collector) {
 			_collector = collector;
-			Acq acq1 = new Acq(8, 4);
-			Acq acq2 = new Acq(18, 6);
-			acqs.add(acq1);
-			acqs.add(acq2);
-			fragDescriptions = new ArrayList<FragDescr>();
-			fragDescriptions.add(new FragDescr(4, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1, 2)))));
-			fragDescriptions.add(new FragDescr(2, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq2, 6)))));
-			fragDescriptions.add(new FragDescr(2, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1, 3)))));
-			fragDescriptions.add(new FragDescr(4, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1, 3), new AcqToNumFrags(acq2, 6)))));
-			buffer = new ArrayList<Integer>();
-			fragments = new ArrayList<Integer>();
+			//			Query acq1 = new Query(8, 4);
+			//			Query acq2 = new Query(18, 6);
+			//			acqs.add(acq1);
+			//			acqs.add(acq2);
+			//			fragDescriptions = new ArrayList<FragDescr>();
+			//			fragDescriptions.add(new FragDescr(4, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1, 2)))));
+			//			fragDescriptions.add(new FragDescr(2, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq2, 6)))));
+			//			fragDescriptions.add(new FragDescr(2, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1, 3)))));
+			//			fragDescriptions.add(new FragDescr(4, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1, 3), new AcqToNumFrags(acq2, 6)))));
+
+			try {
+				ObjectInputStream OIS = new ObjectInputStream(new FileInputStream("C:/storm_stuff/execPlan"));
+				ExecutionPlan exec = (ExecutionPlan) OIS.readObject();
+				acqs = exec.treeQueries.get(0);
+				fragDescriptions = exec.treeExecutions.get(0);
+				OIS.close();
+			} catch (Exception e) {
+				System.err.println("Error!!!: " + e);
+				System.exit(1);
+			}
+			for(Query q : acqs){
+				sums.put(q.id, 0);
+				if(q.range > largestWindow){
+					largestWindow = (int) q.range;
+				}
+			}
 		}
 
 		@Override
@@ -78,12 +98,16 @@ public class WeaveShareTopology {
 					buffSum += i;
 				}
 				fragments.add(buffSum);
-				for (AcqToNumFrags aid : fragDescriptions.get(currFragLengthIndex).acqsToNumFrags) {
-					if (fragments.size() >= aid.numFrags) {
-						aid.acq.sum = 0;
-						for (int i = fragments.size() - aid.numFrags; i < fragments.size(); i++) {
-							aid.acq.sum += fragments.get(i);
+				if(fragments.size() > largestWindow){
+					fragments.remove(0);
+				}
+				for (AcqToNumFrags atnf : fragDescriptions.get(currFragLengthIndex).acqsToNumFrags) {
+					if (fragments.size() >= atnf.numFrags) {
+						int sum = 0;
+						for (int i = fragments.size() - atnf.numFrags; i < fragments.size(); i++) {
+							sum += fragments.get(i);
 						}
+						sums.put(atnf.acq.id, sum);
 					}
 				}
 				buffer = new ArrayList<Integer>();
@@ -95,11 +119,11 @@ public class WeaveShareTopology {
 					currFragLengthIndex++;
 				}
 			}
-			String sums = new String("\n");
-			for(Acq a : acqs){
-				sums += a.slide + ": " + a.sum + "\n";
+			String out = new String("\n");
+			for (Query a : acqs) {
+				out += a.id + ": " + sums.get(a.id)  + "\n";
 			}
-			_collector.emit(tuple, new Values(sums));
+			_collector.emit(tuple, new Values(out));
 			_collector.ack(tuple);
 		}
 
