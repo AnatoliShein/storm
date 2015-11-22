@@ -57,15 +57,23 @@ public class WeaveShareTopology {
 		@Override
 		public void prepare(Map conf, TopologyContext context, OutputCollector collector) {
 			_collector = collector;
-			//			Query acq1 = new Query(8, 4);
-			//			Query acq2 = new Query(18, 6);
-			//			acqs.add(acq1);
-			//			acqs.add(acq2);
-			//			fragDescriptions = new ArrayList<FragDescr>();
-			//			fragDescriptions.add(new FragDescr(4, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1, 2)))));
-			//			fragDescriptions.add(new FragDescr(2, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq2, 6)))));
-			//			fragDescriptions.add(new FragDescr(2, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1, 3)))));
-			//			fragDescriptions.add(new FragDescr(4, new ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1, 3), new AcqToNumFrags(acq2, 6)))));
+			// Query acq1 = new Query(8, 4);
+			// Query acq2 = new Query(18, 6);
+			// acqs.add(acq1);
+			// acqs.add(acq2);
+			// fragDescriptions = new ArrayList<FragDescr>();
+			// fragDescriptions.add(new FragDescr(4, new
+			// ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1,
+			// 2)))));
+			// fragDescriptions.add(new FragDescr(2, new
+			// ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq2,
+			// 6)))));
+			// fragDescriptions.add(new FragDescr(2, new
+			// ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1,
+			// 3)))));
+			// fragDescriptions.add(new FragDescr(4, new
+			// ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1,
+			// 3), new AcqToNumFrags(acq2, 6)))));
 
 			try {
 				ObjectInputStream OIS = new ObjectInputStream(new FileInputStream("C:/storm_stuff/execPlan"));
@@ -77,9 +85,9 @@ public class WeaveShareTopology {
 				System.err.println("Error!!!: " + e);
 				System.exit(1);
 			}
-			for(Query q : acqs){
+			for (Query q : acqs) {
 				sums.put(q.id, 0);
-				if(q.range > largestWindow){
+				if (q.range > largestWindow) {
 					largestWindow = (int) q.range;
 				}
 			}
@@ -90,7 +98,10 @@ public class WeaveShareTopology {
 			if (startTime == -1) {
 				startTime = System.currentTimeMillis();
 			}
-			if (System.currentTimeMillis() - startTime < fragDescriptions.get(currFragLengthIndex).fragLength) {
+			long now = System.currentTimeMillis();
+			FragDescr fd = fragDescriptions.get(currFragLengthIndex);
+			int fragLength = fd.fragLength;
+			if (now - startTime < fragLength) {
 				buffer.add(tuple.getInteger(0));
 			} else {
 				int buffSum = 0;
@@ -98,10 +109,10 @@ public class WeaveShareTopology {
 					buffSum += i;
 				}
 				fragments.add(buffSum);
-				if(fragments.size() > largestWindow){
+				if (fragments.size() > largestWindow) {
 					fragments.remove(0);
 				}
-				for (AcqToNumFrags atnf : fragDescriptions.get(currFragLengthIndex).acqsToNumFrags) {
+				for (AcqToNumFrags atnf : fd.acqsToNumFrags) {
 					if (fragments.size() >= atnf.numFrags) {
 						int sum = 0;
 						for (int i = fragments.size() - atnf.numFrags; i < fragments.size(); i++) {
@@ -110,18 +121,26 @@ public class WeaveShareTopology {
 						sums.put(atnf.acq.id, sum);
 					}
 				}
+				while (true) {
+					if (currFragLengthIndex == fragDescriptions.size() - 1) {
+						currFragLengthIndex = 0;
+					} else {
+						currFragLengthIndex++;
+					}
+					fragLength += fragDescriptions.get(currFragLengthIndex).fragLength;
+					if (now - startTime >= fragLength) {
+						fragments.add(0);
+					} else {
+						break;
+					}
+				}
 				buffer = new ArrayList<Integer>();
 				buffer.add(tuple.getInteger(0));
 				startTime = System.currentTimeMillis();
-				if (currFragLengthIndex == fragDescriptions.size() - 1) {
-					currFragLengthIndex = 0;
-				} else {
-					currFragLengthIndex++;
-				}
 			}
 			String out = new String("\n");
 			for (Query a : acqs) {
-				out += a.id + ": " + sums.get(a.id)  + "\n";
+				out += a.id + ": " + sums.get(a.id) + "\n";
 			}
 			_collector.emit(tuple, new Values(out));
 			_collector.ack(tuple);
@@ -313,8 +332,10 @@ public class WeaveShareTopology {
 		TopologyBuilder builder = new TopologyBuilder();
 
 		builder.setSpout("num_spout", new RandomIntSpout(), 1);
-		// builder.setBolt("sum_bolt", new SumBoltSingle(), 1).shuffleGrouping("num_spout");
-		// builder.setBolt("sum_bolt", new NaiiveSumBoltSingle(), 1).shuffleGrouping("num_spout");
+		// builder.setBolt("sum_bolt", new SumBoltSingle(),
+		// 1).shuffleGrouping("num_spout");
+		// builder.setBolt("sum_bolt", new NaiiveSumBoltSingle(),
+		// 1).shuffleGrouping("num_spout");
 		builder.setBolt("sum_bolt", new SumBoltMult(), 1).allGrouping("num_spout");
 
 		Config conf = new Config();
