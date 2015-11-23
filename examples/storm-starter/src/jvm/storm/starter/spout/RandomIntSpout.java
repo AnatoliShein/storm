@@ -29,34 +29,33 @@ import java.util.Map;
 import java.util.Random;
 
 public class RandomIntSpout extends BaseRichSpout {
-  SpoutOutputCollector _collector;
-  Random _rand;
+	SpoutOutputCollector _collector;
+	Random _rand;
 
+	@Override
+	public void open(Map conf, TopologyContext context, SpoutOutputCollector collector) {
+		_collector = collector;
+		_rand = new Random();
+	}
 
-  @Override
-  public void open(Map conf, TopologyContext context, SpoutOutputCollector collector) {
-    _collector = collector;
-    _rand = new Random();
-  }
+	@Override
+	public void nextTuple() {
+		Utils.sleep(10);
+		int num = _rand.nextInt(100);
+		_collector.emit(new Values(num));
+	}
 
-  @Override
-  public void nextTuple() {
-    Utils.sleep(10);
-    int num = _rand.nextInt(100);
-    _collector.emit(new Values(num));
-  }
+	@Override
+	public void ack(Object id) {
+	}
 
-  @Override
-  public void ack(Object id) {
-  }
+	@Override
+	public void fail(Object id) {
+	}
 
-  @Override
-  public void fail(Object id) {
-  }
-
-  @Override
-  public void declareOutputFields(OutputFieldsDeclarer declarer) {
-    declarer.declare(new Fields("word"));
-  }
+	@Override
+	public void declareOutputFields(OutputFieldsDeclarer declarer) {
+		declarer.declare(new Fields("word"));
+	}
 
 }

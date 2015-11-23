@@ -34,8 +34,6 @@ import storm.starter.spout.RandomIntSpout;
 import java.io.FileInputStream;
 import java.io.ObjectInputStream;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -45,104 +43,26 @@ public class WeaveShareTopology {
 
 	public static class SumBoltMult extends BaseRichBolt {
 		OutputCollector _collector;
-		ArrayList<Query> acqs = new ArrayList<Query>();
-		int currFragLengthIndex = 0;
+		ArrayList<Query> acqs = null;
 		ArrayList<FragDescr> fragDescriptions = null;
-		ArrayList<Integer> fragments = new ArrayList<Integer>();
-		ArrayList<Integer> buffer = new ArrayList<Integer>();
-		long startTime = -1;
-		int largestWindow = -1;
-		HashMap<Integer, Integer> sums = new HashMap<Integer, Integer>();
+		AggregateThread aggrThread = null;
+
+		public SumBoltMult(ArrayList<Query> acqs_, ArrayList<FragDescr> fragDescriptions_) {
+			acqs = acqs_;
+			fragDescriptions = fragDescriptions_;
+		}
 
 		@Override
 		public void prepare(Map conf, TopologyContext context, OutputCollector collector) {
 			_collector = collector;
-			// Query acq1 = new Query(8, 4);
-			// Query acq2 = new Query(18, 6);
-			// acqs.add(acq1);
-			// acqs.add(acq2);
-			// fragDescriptions = new ArrayList<FragDescr>();
-			// fragDescriptions.add(new FragDescr(4, new
-			// ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1,
-			// 2)))));
-			// fragDescriptions.add(new FragDescr(2, new
-			// ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq2,
-			// 6)))));
-			// fragDescriptions.add(new FragDescr(2, new
-			// ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1,
-			// 3)))));
-			// fragDescriptions.add(new FragDescr(4, new
-			// ArrayList<AcqToNumFrags>(Arrays.asList(new AcqToNumFrags(acq1,
-			// 3), new AcqToNumFrags(acq2, 6)))));
-
-			try {
-				ObjectInputStream OIS = new ObjectInputStream(new FileInputStream("C:/storm_stuff/execPlan"));
-				ExecutionPlan exec = (ExecutionPlan) OIS.readObject();
-				acqs = exec.treeQueries.get(0);
-				fragDescriptions = exec.treeExecutions.get(0);
-				OIS.close();
-			} catch (Exception e) {
-				System.err.println("Error!!!: " + e);
-				System.exit(1);
-			}
-			for (Query q : acqs) {
-				sums.put(q.id, 0);
-				if (q.range > largestWindow) {
-					largestWindow = (int) q.range;
-				}
-			}
+			aggrThread = new AggregateThread(_collector, acqs, fragDescriptions);
+			Thread aggrCalc = new Thread(aggrThread);
+			aggrCalc.start();
 		}
 
 		@Override
 		public void execute(Tuple tuple) {
-			if (startTime == -1) {
-				startTime = System.currentTimeMillis();
-			}
-			long now = System.currentTimeMillis();
-			FragDescr fd = fragDescriptions.get(currFragLengthIndex);
-			int fragLength = fd.fragLength;
-			if (now - startTime < fragLength) {
-				buffer.add(tuple.getInteger(0));
-			} else {
-				int buffSum = 0;
-				for (Integer i : buffer) {
-					buffSum += i;
-				}
-				fragments.add(buffSum);
-				if (fragments.size() > largestWindow) {
-					fragments.remove(0);
-				}
-				for (AcqToNumFrags atnf : fd.acqsToNumFrags) {
-					if (fragments.size() >= atnf.numFrags) {
-						int sum = 0;
-						for (int i = fragments.size() - atnf.numFrags; i < fragments.size(); i++) {
-							sum += fragments.get(i);
-						}
-						sums.put(atnf.acq.id, sum);
-					}
-				}
-				while (true) {
-					if (currFragLengthIndex == fragDescriptions.size() - 1) {
-						currFragLengthIndex = 0;
-					} else {
-						currFragLengthIndex++;
-					}
-					fragLength += fragDescriptions.get(currFragLengthIndex).fragLength;
-					if (now - startTime >= fragLength) {
-						fragments.add(0);
-					} else {
-						break;
-					}
-				}
-				buffer = new ArrayList<Integer>();
-				buffer.add(tuple.getInteger(0));
-				startTime = System.currentTimeMillis();
-			}
-			String out = new String("\n");
-			for (Query a : acqs) {
-				out += a.id + ": " + sums.get(a.id) + "\n";
-			}
-			_collector.emit(tuple, new Values(out));
+			aggrThread.buffer.add(tuple.getInteger(0));
 			_collector.ack(tuple);
 		}
 
@@ -329,16 +249,38 @@ public class WeaveShareTopology {
 	}
 
 	public static void main(String[] args) throws Exception {
+		ObjectInputStream OIS = new ObjectInputStream(new FileInputStream("C:/storm_stuff/execPlan"));
+		ExecutionPlan exec = (ExecutionPlan) OIS.readObject();
+		OIS.close();
+
+		int multiplier = 100;
+		for (ArrayList<Query> alq : exec.treeQueries) {
+			for (Query q : alq) {
+				q.slide *= multiplier;
+				q.range *= multiplier;
+			}
+		}
+		for (ArrayList<FragDescr> alfd : exec.treeExecutions) {
+			for (FragDescr fd : alfd) {
+				fd.fragLength *= multiplier;
+				//				for (AcqToNumFrags atnf : fd.acqsToNumFrags) {
+				//					atnf.acq.slide *= multiplier;
+				//					atnf.acq.range *= multiplier;
+				//				}
+			}
+		}
+
 		TopologyBuilder builder = new TopologyBuilder();
 
 		builder.setSpout("num_spout", new RandomIntSpout(), 1);
-		// builder.setBolt("sum_bolt", new SumBoltSingle(),
-		// 1).shuffleGrouping("num_spout");
-		// builder.setBolt("sum_bolt", new NaiiveSumBoltSingle(),
-		// 1).shuffleGrouping("num_spout");
-		builder.setBolt("sum_bolt", new SumBoltMult(), 1).allGrouping("num_spout");
+		//		int i = 1;
+		//		builder.setBolt("sum_bolt_" + i, new SumBoltMult(exec.treeQueries.get(i), exec.treeExecutions.get(i)), 1).allGrouping("num_spout");
+		for (int i = 0; i < exec.treeQueries.size(); i++) {
+			builder.setBolt("sum_bolt_" + i, new SumBoltMult(exec.treeQueries.get(i), exec.treeExecutions.get(i)), 1).allGrouping("num_spout");
+		}
 
 		Config conf = new Config();
+		////////////////////
 		conf.setDebug(true);
 
 		if (args != null && args.length > 0) {
@@ -349,9 +291,97 @@ public class WeaveShareTopology {
 
 			LocalCluster cluster = new LocalCluster();
 			cluster.submitTopology("test", conf, builder.createTopology());
-			Utils.sleep(10000);
+			Utils.sleep(100000);
 			cluster.killTopology("test");
 			cluster.shutdown();
 		}
 	}
 }
+
+//public static class SumBoltMult extends BaseRichBolt {
+//OutputCollector _collector;
+//ArrayList<Query> acqs = null;
+//int currFragLengthIndex = 0;
+//ArrayList<FragDescr> fragDescriptions = null;
+//ArrayList<Integer> fragments = new ArrayList<Integer>();
+//List buffer = Collections.synchronizedList(new ArrayList<Integer>());
+//long startTime = -1;
+//int largestWindow = -1;
+//HashMap<Integer, Integer> sums = new HashMap<Integer, Integer>();
+//
+//public SumBoltMult(ArrayList<Query> acqs_, ArrayList<FragDescr> fragDescriptions_) {
+//	acqs = acqs_;
+//	fragDescriptions = fragDescriptions_;
+//	for (Query q : acqs) {
+//		sums.put(q.id, 0);
+//		if (q.range > largestWindow) {
+//			largestWindow = (int) q.range;
+//		}
+//	}
+//}
+//
+//@Override
+//public void prepare(Map conf, TopologyContext context, OutputCollector collector) {
+//	_collector = collector;
+//	Thread aggrCalc = new Thread(new AggregateThread());
+//	aggrCalc.start();
+//}
+//
+//@Override
+//public void execute(Tuple tuple) {
+//	if (startTime == -1) {
+//		startTime = System.currentTimeMillis();
+//	}
+//	long now = System.currentTimeMillis();
+//	FragDescr fd = fragDescriptions.get(currFragLengthIndex);
+//	int fragLength = fd.fragLength;
+//	if (now - startTime < fragLength) {
+//		buffer.add(tuple.getInteger(0));
+//	} else {
+//		int buffSum = 0;
+//		for (Object i : buffer) {
+//			buffSum += (Integer) i;
+//		}
+//		fragments.add(buffSum);
+//		if (fragments.size() > largestWindow) {
+//			fragments.remove(0);
+//		}
+//		for (AcqToNumFrags atnf : fd.acqsToNumFrags) {
+//			if (fragments.size() >= atnf.numFrags) {
+//				int sum = 0;
+//				for (int i = fragments.size() - atnf.numFrags; i < fragments.size(); i++) {
+//					sum += fragments.get(i);
+//				}
+//				sums.put(atnf.acq.id, sum);
+//			}
+//		}
+//		while (true) {
+//			if (currFragLengthIndex == fragDescriptions.size() - 1) {
+//				currFragLengthIndex = 0;
+//			} else {
+//				currFragLengthIndex++;
+//			}
+//			fragLength += fragDescriptions.get(currFragLengthIndex).fragLength;
+//			if (now - startTime >= fragLength) {
+//				fragments.add(0);
+//			} else {
+//				break;
+//			}
+//		}
+//		buffer = new ArrayList<Integer>();
+//		buffer.add(tuple.getInteger(0));
+//		startTime = System.currentTimeMillis();
+//	}
+//	String out = new String("\n");
+//	for (Query a : acqs) {
+//		out += a.id + ": " + sums.get(a.id) + "\n";
+//	}
+//	_collector.emit(tuple, new Values(out));
+//	_collector.ack(tuple);
+//}
+//
+//@Override
+//public void declareOutputFields(OutputFieldsDeclarer declarer) {
+//	declarer.declare(new Fields("sums"));
+//}
+//}
