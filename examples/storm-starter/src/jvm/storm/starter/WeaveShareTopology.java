@@ -62,7 +62,7 @@ public class WeaveShareTopology {
 
 		@Override
 		public void execute(Tuple tuple) {
-			aggrThread.buffer.add(tuple.getInteger(0));
+			aggrThread.add(tuple.getInteger(0));
 			_collector.ack(tuple);
 		}
 
@@ -249,7 +249,13 @@ public class WeaveShareTopology {
 	}
 
 	public static void main(String[] args) throws Exception {
-		ObjectInputStream OIS = new ObjectInputStream(new FileInputStream("C:/storm_stuff/execPlan"));
+
+		if (args == null || args.length < 2) {
+			System.err.println("Check Arguments!!!");
+			System.exit(1);
+		}
+
+		ObjectInputStream OIS = new ObjectInputStream(new FileInputStream(args[0]));
 		ExecutionPlan exec = (ExecutionPlan) OIS.readObject();
 		OIS.close();
 
@@ -263,38 +269,32 @@ public class WeaveShareTopology {
 		for (ArrayList<FragDescr> alfd : exec.treeExecutions) {
 			for (FragDescr fd : alfd) {
 				fd.fragLength *= multiplier;
-				//				for (AcqToNumFrags atnf : fd.acqsToNumFrags) {
-				//					atnf.acq.slide *= multiplier;
-				//					atnf.acq.range *= multiplier;
-				//				}
 			}
 		}
 
 		TopologyBuilder builder = new TopologyBuilder();
 
-		builder.setSpout("num_spout", new RandomIntSpout(), 1);
-		//		int i = 1;
-		//		builder.setBolt("sum_bolt_" + i, new SumBoltMult(exec.treeQueries.get(i), exec.treeExecutions.get(i)), 1).allGrouping("num_spout");
-		for (int i = 0; i < exec.treeQueries.size(); i++) {
-			builder.setBolt("sum_bolt_" + i, new SumBoltMult(exec.treeQueries.get(i), exec.treeExecutions.get(i)), 1).allGrouping("num_spout");
-		}
+		builder.setSpout("num_spout", new RandomIntSpout(Double.valueOf(args[1])), 1);
+		//		for (int i = 0; i < exec.treeQueries.size(); i++) {
+		//			builder.setBolt("sum_bolt_" + i, new SumBoltMult(exec.treeQueries.get(i), exec.treeExecutions.get(i)), 1).allGrouping("num_spout");
+		//		}
 
 		Config conf = new Config();
-		////////////////////
 		conf.setDebug(true);
 
-		if (args != null && args.length > 0) {
-			conf.setNumWorkers(3);
+		//		if (args != null && args.length > 0) {
+		//			conf.setNumWorkers(3);
+		//
+		//			StormSubmitter.submitTopologyWithProgressBar(args[0], conf, builder.createTopology());
+		//		} else {
+		//		}
 
-			StormSubmitter.submitTopologyWithProgressBar(args[0], conf, builder.createTopology());
-		} else {
+		LocalCluster cluster = new LocalCluster();
+		cluster.submitTopology("test", conf, builder.createTopology());
+		Utils.sleep(100000);
+		cluster.killTopology("test");
+		cluster.shutdown();
 
-			LocalCluster cluster = new LocalCluster();
-			cluster.submitTopology("test", conf, builder.createTopology());
-			Utils.sleep(100000);
-			cluster.killTopology("test");
-			cluster.shutdown();
-		}
 	}
 }
 
